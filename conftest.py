@@ -119,6 +119,7 @@ def pytest_runtest_logreport(report):
         outcome = "PASSED" if report.passed else "FAILED" if report.failed else "SKIPPED"
         print(f"{report.nodeid} [{outcome}] {report.duration:.3f}s")
 
+
 def pytest_terminal_summary(terminalreporter):
     from transformers.testing_utils import pytest_terminal_summary_main
 
