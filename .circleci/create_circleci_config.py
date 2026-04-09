@@ -369,6 +369,7 @@ hub_job = CircleCIJob(
         'git config --global user.name "ci"',
     ],
     marker="is_staging_test",
+    parallelism=2,
     pytest_num_workers=2,
     resource_class="medium",
 )
