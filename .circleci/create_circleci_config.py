@@ -192,6 +192,7 @@ class CircleCIJob:
             {"run": {"name": "download and unzip hub cache", "command": 'curl -L -o huggingface-cache.tar.gz https://huggingface.co/datasets/hf-internal-testing/hf_hub_cache/resolve/main/huggingface-cache.tar.gz && apt-get install pigz && tar --use-compress-program="pigz -d -p 8" -xf huggingface-cache.tar.gz && mv -n hub/* /root/.cache/huggingface/hub/ && ls -la /root/.cache/huggingface/hub/'}},
             {"run": {
                 "name": "Run tests",
+                "no_output_timeout": "15m",
                 "command": f"({timeout_cmd} python3 -m pytest {marker_cmd} -n {self.pytest_num_workers} {junit_flags} {repeat_on_failure_flags} {' '.join(pytest_flags)} $(cat splitted_tests.txt) | tee tests_output.txt)"}
             },
             {"run":
@@ -294,7 +295,7 @@ hub_job = CircleCIJob(
         'git config --global user.name "ci"',
     ],
     marker="is_staging_test",
-    pytest_num_workers=2,
+    pytest_num_workers=4,
     resource_class="medium",
 )
 
