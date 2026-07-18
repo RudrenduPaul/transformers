@@ -146,7 +146,7 @@ class SentencePieceExtractor:
     Extractor implementation for SentencePiece trained models. https://github.com/google/sentencepiece
     """
 
-    def __init__(self, model: str):
+    def __init__(self, model):
         requires_backends(self, "sentencepiece")
         requires_backends(self, "protobuf")
 
@@ -154,8 +154,15 @@ class SentencePieceExtractor:
         model_pb2 = import_protobuf()
 
         m = model_pb2.ModelProto()
-        with open(model, "rb") as f:
-            m.ParseFromString(f.read())
+        if hasattr(model, "serialized_model_proto"):
+            # `model` is already a loaded `sentencepiece.SentencePieceProcessor` instance (e.g. a
+            # custom SentencePiece model the user loaded directly) rather than a path to a `.model`
+            # file on disk, so there is no `vocab_file` to open. See
+            # https://github.com/huggingface/transformers/issues/28370.
+            m.ParseFromString(model.serialized_model_proto())
+        else:
+            with open(model, "rb") as f:
+                m.ParseFromString(f.read())
         self.proto = m
 
     def extract(self, model_type, **kwargs) -> tuple[dict[str, int], list[tuple]]:
@@ -701,8 +708,27 @@ class SpmConverter(Converter):
         model_pb2 = import_protobuf()
 
         m = model_pb2.ModelProto()
-        with open(self.original_tokenizer.vocab_file, "rb") as f:
-            m.ParseFromString(f.read())
+        vocab_file = getattr(self.original_tokenizer, "vocab_file", None)
+        if vocab_file is not None:
+            # `self._spm_source` is reused below (in `tokenizer()`) to avoid re-deriving how to
+            # load the SentencePiece model a second time.
+            self._spm_source = vocab_file
+            with open(vocab_file, "rb") as f:
+                m.ParseFromString(f.read())
+        elif hasattr(self.original_tokenizer, "serialized_model_proto"):
+            # `original_tokenizer` can be a raw `sentencepiece.SentencePieceProcessor` instance
+            # (e.g. a custom SentencePiece model loaded directly by the user) instead of a slow
+            # tokenizer instance with a `vocab_file` attribute. See
+            # https://github.com/huggingface/transformers/issues/28370.
+            self._spm_source = self.original_tokenizer
+            m.ParseFromString(self.original_tokenizer.serialized_model_proto())
+        else:
+            raise AttributeError(
+                f"`{type(self.original_tokenizer).__name__}` has neither a `vocab_file` attribute nor a "
+                "`serialized_model_proto` method, so its SentencePiece model can't be loaded. Pass a slow "
+                "tokenizer instance with a `vocab_file` attribute, or a `sentencepiece.SentencePieceProcessor` "
+                "instance loaded from your custom `.model` file."
+            )
         self.proto = m
 
         if self.proto.trainer_spec.byte_fallback and not self.handle_byte_fallback:
@@ -733,7 +759,7 @@ class SpmConverter(Converter):
             )
 
         elif model_type == 2:
-            _, merges = self.SpmExtractor(self.original_tokenizer.vocab_file).extract(vocab_scores)
+            _, merges = self.SpmExtractor(self._spm_source).extract(vocab_scores)
             bpe_vocab = {word: i for i, (word, score) in enumerate(vocab_scores)}
             tokenizer = Tokenizer(
                 BPE(
@@ -1616,10 +1642,18 @@ class LlamaConverter(SpmConverter):
     handle_byte_fallback = True
 
     def vocab(self, proto):
+        if hasattr(self.original_tokenizer, "convert_ids_to_tokens"):
+            get_special_piece = self.original_tokenizer.convert_ids_to_tokens
+        else:
+            # `original_tokenizer` is a raw `sentencepiece.SentencePieceProcessor` (e.g. a custom
+            # SentencePiece model loaded directly by the user) rather than a slow tokenizer
+            # instance, so it has no added-tokens layer to consult; fall back to the proto's own
+            # special-token pieces. See https://github.com/huggingface/transformers/issues/28370.
+            get_special_piece = self.original_tokenizer.id_to_piece
         vocab = [
-            (self.original_tokenizer.convert_ids_to_tokens(0), 0.0),
-            (self.original_tokenizer.convert_ids_to_tokens(1), 0.0),
-            (self.original_tokenizer.convert_ids_to_tokens(2), 0.0),
+            (get_special_piece(0), 0.0),
+            (get_special_piece(1), 0.0),
+            (get_special_piece(2), 0.0),
         ]
         vocab += [(piece.piece, piece.score) for piece in proto.pieces[3:]]
         return vocab

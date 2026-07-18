@@ -2,8 +2,8 @@ import unittest
 import warnings
 from dataclasses import dataclass
 
-from transformers.convert_slow_tokenizer import SpmConverter
-from transformers.testing_utils import get_tests_dir
+from transformers.convert_slow_tokenizer import LlamaConverter, SpmConverter
+from transformers.testing_utils import get_tests_dir, require_sentencepiece
 
 
 @dataclass
@@ -37,3 +37,31 @@ class ConvertSlowTokenizerTest(unittest.TestCase):
             " which is not implemented in the fast tokenizers.",
             str(w[0].message),
         )
+
+    @require_sentencepiece
+    def test_spm_converter_accepts_raw_sentencepiece_processor(self):
+        """
+        Regression test for #28370: `Converter` subclasses should also accept a raw
+        `sentencepiece.SentencePieceProcessor` (e.g. loaded directly by the user from a custom
+        `.model` file) rather than requiring a slow tokenizer instance with a `vocab_file`
+        attribute.
+        """
+        import sentencepiece as spm
+
+        spm_model_file = get_tests_dir("fixtures/test_sentencepiece.model")
+
+        original_tokenizer = spm.SentencePieceProcessor()
+        original_tokenizer.Load(spm_model_file)
+        self.assertFalse(hasattr(original_tokenizer, "vocab_file"))
+
+        fast_tokenizer = LlamaConverter(original_tokenizer).converted()
+        vocab = fast_tokenizer.get_vocab()
+
+        # There is no HF added-tokens layer to consult for a raw `SentencePieceProcessor`, so the
+        # first three ids should fall back to the raw SentencePiece model's own special-token
+        # pieces.
+        for token_id in range(3):
+            piece = original_tokenizer.id_to_piece(token_id)
+            self.assertEqual(vocab[piece], token_id)
+
+        self.assertEqual(fast_tokenizer.get_vocab_size(), original_tokenizer.GetPieceSize())
